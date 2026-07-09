@@ -232,6 +232,45 @@
   .estado.error{color:#e08a6e;}
   .estado.exito{color:var(--ambar-fuerte);}
 
+  /* --- Visor 3D del STL --- */
+  .visor-contenedor{
+    margin-top:20px;
+    display:none;
+  }
+  .visor-contenedor.visible{display:block;}
+  #visor-3d{
+    width:100%;
+    height:340px;
+    border-radius:var(--radio);
+    overflow:hidden;
+    background:radial-gradient(circle at 50% 40%, #211d16 0%, #0d0b08 75%);
+    border:1px solid var(--linea);
+    cursor:grab;
+  }
+  #visor-3d:active{cursor:grabbing;}
+  #visor-3d canvas{display:block;}
+  .visor-ayuda{
+    margin-top:8px;
+    font-size:11.5px;
+    color:#615a4d;
+    text-align:center;
+  }
+  button.descargar{
+    width:100%;
+    margin-top:14px;
+    padding:14px 20px;
+    font-family:'Work Sans', sans-serif;
+    font-size:14px;
+    font-weight:600;
+    color:var(--porcelana);
+    background:transparent;
+    border:1px solid var(--bronce);
+    border-radius:var(--radio);
+    cursor:pointer;
+    transition:background .2s ease, color .2s ease;
+  }
+  button.descargar:hover{background:var(--umbra);}
+
   footer{
     margin-top:56px;
     padding-top:24px;
@@ -333,6 +372,17 @@
     <span class="etiqueta">03 — Generar</span>
     <button class="generar" id="btn-generar" disabled>Sube una imagen primero</button>
     <p class="estado" id="estado"></p>
+
+    <div class="visor-contenedor" id="visor-contenedor">
+      <div id="visor-3d"></div>
+      <p class="visor-ayuda">Arrastrá para rotar, scroll para acercar/alejar</p>
+      <div class="control-luz">
+        <span>Estudio</span>
+        <div class="interruptor" id="interruptor-visor"></div>
+        <span>Retroiluminado</span>
+      </div>
+      <button class="descargar" id="btn-descargar">Descargar .stl</button>
+    </div>
   </section>
 
   <footer>
@@ -345,7 +395,20 @@
   </footer>
 </div>
 
-<script>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+  import * as THREE from 'three';
+  import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+  import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+  import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
   const dropzone = document.getElementById('dropzone');
   const inputImagen = document.getElementById('input-imagen');
   const marco = document.getElementById('marco');
@@ -357,11 +420,149 @@
   const checkboxIA = document.getElementById('mejorar_ia');
   const filaIA = document.getElementById('fila-ia');
   const textoIA = document.getElementById('texto-ia');
+  const visorContenedor = document.getElementById('visor-contenedor');
+  const visorDiv = document.getElementById('visor-3d');
+  const interruptorVisor = document.getElementById('interruptor-visor');
+  const btnDescargar = document.getElementById('btn-descargar');
 
   let archivoActual = null;
   let luzEncendida = false;
+  let ultimoBlob = null;
+  let ultimoNombreDescarga = 'litofania.stl';
 
-  // --- Disponibilidad de la mejora con IA (ventana horaria) ---
+  // ============ Visor 3D (Three.js) ============
+  let escena, camara, renderer, controles, malla, luzFrontal, luzTrasera, pmrem;
+  let retroiluminado = false;
+  let visorListo = false;
+
+  function inicializarVisor(){
+    if (visorListo) return;
+    visorListo = true;
+
+    escena = new THREE.Scene();
+
+    camara = new THREE.PerspectiveCamera(45, visorDiv.clientWidth / visorDiv.clientHeight, 0.1, 5000);
+    camara.position.set(0, 60, 160);
+
+    renderer = new THREE.WebGLRenderer({antialias: true, alpha: true});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(visorDiv.clientWidth, visorDiv.clientHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    visorDiv.appendChild(renderer.domElement);
+
+    pmrem = new THREE.PMREMGenerator(renderer);
+    escena.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    controles = new OrbitControls(camara, renderer.domElement);
+    controles.enableDamping = true;
+    controles.dampingFactor = 0.08;
+    controles.minDistance = 20;
+    controles.maxDistance = 800;
+
+    luzFrontal = new THREE.DirectionalLight(0xfff4e6, 1.0);
+    luzFrontal.position.set(60, 100, 140);
+    escena.add(luzFrontal);
+    escena.add(new THREE.AmbientLight(0xffffff, 0.35));
+
+    luzTrasera = new THREE.PointLight(0xffb066, 0, 500);
+    luzTrasera.position.set(0, 0, -140);
+    escena.add(luzTrasera);
+
+    animar();
+    window.addEventListener('resize', ajustarTamanoVisor);
+  }
+
+  function ajustarTamanoVisor(){
+    if (!visorListo) return;
+    camara.aspect = visorDiv.clientWidth / visorDiv.clientHeight;
+    camara.updateProjectionMatrix();
+    renderer.setSize(visorDiv.clientWidth, visorDiv.clientHeight);
+  }
+
+  function animar(){
+    requestAnimationFrame(animar);
+    controles.update();
+    renderer.render(escena, camara);
+  }
+
+  function cargarSTLenVisor(arrayBuffer){
+    inicializarVisor();
+
+    const geometria = new STLLoader().parse(arrayBuffer);
+    geometria.center();
+    geometria.computeVertexNormals();
+    geometria.computeBoundingSphere();
+
+    if (malla){
+      escena.remove(malla);
+      malla.geometry.dispose();
+      malla.material.dispose();
+    }
+
+    const material = new THREE.MeshPhysicalMaterial({
+      color: 0xf2ece1,
+      roughness: 0.4,
+      metalness: 0.0,
+      transmission: 0.0,
+      thickness: 3,
+      ior: 1.45,
+      clearcoat: 0.15,
+    });
+
+    malla = new THREE.Mesh(geometria, material);
+    malla.rotation.x = -Math.PI / 2; // el STL viene apoyado en el plano XY
+    escena.add(malla);
+
+    const radio = geometria.boundingSphere.radius || 50;
+    camara.position.set(0, radio * 0.5, radio * 2.4);
+    camara.near = radio * 0.01;
+    camara.far = radio * 20;
+    camara.updateProjectionMatrix();
+    controles.target.set(0, 0, 0);
+    controles.update();
+
+    aplicarModoLuzVisor();
+    visorContenedor.classList.add('visible');
+    requestAnimationFrame(ajustarTamanoVisor);
+  }
+
+  function aplicarModoLuzVisor(){
+    if (!malla) return;
+    if (retroiluminado){
+      luzFrontal.intensity = 0.12;
+      luzTrasera.intensity = 3.5;
+      malla.material.transmission = 0.92;
+      malla.material.roughness = 0.22;
+      malla.material.thickness = 2.2;
+    } else {
+      luzFrontal.intensity = 1.0;
+      luzTrasera.intensity = 0;
+      malla.material.transmission = 0.0;
+      malla.material.roughness = 0.4;
+      malla.material.thickness = 3;
+    }
+  }
+
+  interruptorVisor.addEventListener('click', () => {
+    retroiluminado = !retroiluminado;
+    interruptorVisor.classList.toggle('on', retroiluminado);
+    aplicarModoLuzVisor();
+  });
+
+  btnDescargar.addEventListener('click', () => {
+    if (!ultimoBlob) return;
+    const url = URL.createObjectURL(ultimoBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = ultimoNombreDescarga;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  // ============ Disponibilidad de la mejora con IA (ventana horaria) ============
   async function revisarDisponibilidadIA() {
     try {
       const resp = await fetch('/ia/estado');
@@ -384,6 +585,7 @@
   }
   revisarDisponibilidadIA();
 
+  // ============ Sliders ============
   const sliders = {
     ancho_mm: {sufijo: ' mm'},
     resolucion: {sufijo: ' px'},
@@ -400,8 +602,8 @@
     });
   });
 
+  // ============ Carga de imagen y preview 2D con luz ============
   function activarLuzAutomatica(){
-    // Enciende la luz sola una vez, breve, para mostrar el efecto
     setTimeout(() => {
       lienzo.classList.add('encendido');
       interruptor.classList.add('on');
@@ -422,6 +624,7 @@
     btnGenerar.textContent = 'Generar litofanía (.stl)';
     estado.textContent = '';
     estado.className = 'estado';
+    visorContenedor.classList.remove('visible');
     activarLuzAutomatica();
   }
 
@@ -447,6 +650,7 @@
     interruptor.classList.toggle('on', luzEncendida);
   });
 
+  // ============ Generar litofanía ============
   btnGenerar.addEventListener('click', async () => {
     if (!archivoActual) return;
     btnGenerar.disabled = true;
@@ -456,6 +660,7 @@
       ? 'Analizando la foto con IA y generando el STL, puede tardar un poco más…'
       : 'Esto puede tardar unos segundos según el tamaño de la imagen.';
     estado.className = 'estado';
+    visorContenedor.classList.remove('visible');
 
     const datos = new FormData();
     datos.append('imagen', archivoActual);
@@ -478,17 +683,17 @@
       }
       const motivoIA = resp.headers.get('X-IA-Motivo');
       const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
       const nombreBase = archivoActual.name.replace(/\.[^.]+$/, '');
-      a.href = url;
-      a.download = `${nombreBase}-litofania.stl`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+
+      ultimoBlob = blob;
+      ultimoNombreDescarga = `${nombreBase}-litofania.stl`;
+
+      const buffer = await blob.arrayBuffer();
+      cargarSTLenVisor(buffer);
+
       estado.textContent = motivoIA
-        ? `Listo — se descargó tu .stl. IA: ${decodeURIComponent(motivoIA)}`
-        : 'Listo — tu archivo .stl se ha descargado.';
+        ? `Listo — girá el modelo para verlo. IA: ${decodeURIComponent(motivoIA)}`
+        : 'Listo — girá el modelo para verlo y descargalo cuando quieras.';
       estado.className = 'estado exito';
     } catch (err) {
       estado.textContent = err.message || 'Ocurrió un error al generar el archivo.';
