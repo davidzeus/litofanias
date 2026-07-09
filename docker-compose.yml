@@ -1,0 +1,21 @@
+services:
+  litofania:
+    build: .
+    image: litofania:latest
+    container_name: litofania
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Peticiones permitidas por IP (formato slowapi, ej. "10/minute", "100/hour")
+      - RATE_LIMIT=10/minute
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
