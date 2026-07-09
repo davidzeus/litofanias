@@ -55,10 +55,28 @@ La app queda disponible en `http://localhost:8000` (o el puerto/dominio que conf
 
 ```
 POST /litofania          → recibe la imagen (multipart/form-data) + parámetros, devuelve el .stl
+POST /litofania/ia        → igual, pero analiza y ajusta la foto con IA antes de generar
+GET  /ia/estado            → indica si la mejora con IA está disponible en este momento
 GET  /health              → chequeo de estado del servicio
 ```
 
-Por ser un servicio público, tiene límites de uso: tamaño máx. de imagen 15 MB y un *rate limit* configurable (por defecto 10 peticiones/minuto por IP, variable de entorno `RATE_LIMIT`).
+Por ser un servicio público, tiene límites de uso: tamaño máx. de imagen 15 MB y un *rate limit* configurable por variable de entorno (`RATE_LIMIT` para `/litofania`, `RATE_LIMIT_IA` para `/litofania/ia`, por defecto 10/min y 5/min).
+
+## Mejora de imagen con IA (opcional)
+
+El servicio puede pedirle a un modelo de visión corriendo en **Ollama local** que analice la foto y recomiende contraste, brillo, gamma e inversión antes de generar el STL.
+
+- **Motor:** Ollama en tu red local (por defecto `ministral-es:latest`), configurado por `.env`.
+- **Disponibilidad limitada:** por ser un servicio gratuito, esta función solo está habilitada en una ventana horaria configurable (por defecto **15:00 a 05:00, hora Argentina**), para no competir con el uso normal de la GPU. Fuera de ese horario, el botón aparece deshabilitado en el frontend y el endpoint devuelve `403`.
+- **Degradación segura:** si Ollama no responde o tarda demasiado, el endpoint devuelve error `503` sin afectar la generación normal de litofanías (`/litofania` sigue funcionando siempre).
+- **Endpoint:** `POST /litofania/ia` (mismos parámetros que `/litofania`, sin `invertir` porque lo decide la IA). Tiene su propio *rate limit*, más estricto, porque es más pesado.
+- **Configuración:** copiá `.env.example` como `.env` y completá `OLLAMA_HOST`, `OLLAMA_MODEL`, `IA_HORA_INICIO` e `IA_HORA_FIN` según tu caso.
+
+```bash
+cp .env.example .env
+# editá .env con tus valores
+docker compose up -d --build
+```
 
 ## Contribuir
 

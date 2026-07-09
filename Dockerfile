@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg62-turbo \
     zlib1g \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 COPY app/requirements.txt .
